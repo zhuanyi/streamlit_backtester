@@ -241,25 +241,6 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
     Returns:
         Matplotlib figure: Plot of backtest results
     """
-    # Debugging: Print all parameters before processing
-    st.write("Debug - Parameters received:", params)
-
-    # Check for problematic parameters
-    for param_name, param_value in params.items():
-        st.write(f"Parameter '{param_name}': {type(param_value).__name__} = {param_value}")
-
-        # Convert any tuples to appropriate values (defensive approach)
-        if isinstance(param_value, tuple):
-            st.warning(f"Found tuple for parameter '{param_name}': {param_value}")
-            # Try to convert tuple to a single value if it has only one element
-            if len(param_value) == 1:
-                params[param_name] = param_value[0]
-                st.write(f"Converted to: {params[param_name]}")
-            # Otherwise, use the first value (or implement other logic as needed)
-            else:
-                params[param_name] = param_value[0]  # Using first value as a simple fix
-                st.write(f"Using first value: {params[param_name]}")
-
     # Initialize Cerebro engine
     cerebro = bt.Cerebro()
 
@@ -391,9 +372,6 @@ def main():
     # Dynamically get parameters from the selected strategy
     for param_name, param_default in selected_strategy_class.params._getitems():
         if param_name not in ['ticker']:  # Skip ticker as we'll set it separately
-            param_type = type(param_default).__name__
-            st.sidebar.text(f"Parameter type: {param_type}")  # Debug info
-
             # Set the appropriate input type based on the default parameter type
             if isinstance(param_default, bool):
                 strategy_params[param_name] = st.sidebar.checkbox(
@@ -413,19 +391,10 @@ def main():
                     step=0.01
                 )
             else:
-                input_value = st.sidebar.text_input(
+                strategy_params[param_name] = st.sidebar.text_input(
                     f'{param_name}',
                     value=str(param_default)
                 )
-                # Simple safe conversion
-                if input_value.isdigit():
-                    strategy_params[param_name] = int(input_value)
-                elif input_value.replace('.', '', 1).isdigit() and input_value.count('.') < 2:
-                    strategy_params[param_name] = float(input_value)
-                else:
-                    strategy_params[param_name] = input_value
-    # Debug: Show the parameters that will be used
-    st.sidebar.write("Parameters to be used:", strategy_params)
 
     # Convert parameters to appropriate types
     strategy_params = {param_name: to_number(strategy_params[param_name]) for param_name in strategy_params}
@@ -468,10 +437,7 @@ def main():
             else:
                 st.error("Backtest failed. Please check your inputs and try again.")
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
             st.error(f"An error occurred during the backtest: {str(e)}")
-            st.error(f"Error details:\n```\n{error_details}\n```")
 
         # Complete progress
         progress_bar.progress(100)
