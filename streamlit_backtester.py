@@ -352,6 +352,13 @@ def main():
 
     # Helper function to convert string to appropriate number type
     def to_number(s):
+        """Convert string to appropriate number type if possible"""
+        if isinstance(s, (int, float)):  # Already a number
+            return s
+
+        if not isinstance(s, str):  # If not a string (e.g., tuple), return as is
+            return s
+
         try:
             n = float(s)
             return int(n) if n.is_integer() else n
@@ -365,10 +372,29 @@ def main():
     # Dynamically get parameters from the selected strategy
     for param_name, param_default in selected_strategy_class.params._getitems():
         if param_name not in ['ticker']:  # Skip ticker as we'll set it separately
-            strategy_params[param_name] = st.sidebar.text_input(
-                f'{param_name}',
-                value=str(param_default)
-            )
+            # Set the appropriate input type based on the default parameter type
+            if isinstance(param_default, bool):
+                strategy_params[param_name] = st.sidebar.checkbox(
+                    f'{param_name}',
+                    value=param_default
+                )
+            elif isinstance(param_default, int):
+                strategy_params[param_name] = st.sidebar.number_input(
+                    f'{param_name}',
+                    value=param_default,
+                    step=1
+                )
+            elif isinstance(param_default, float):
+                strategy_params[param_name] = st.sidebar.number_input(
+                    f'{param_name}',
+                    value=param_default,
+                    step=0.01
+                )
+            else:
+                strategy_params[param_name] = st.sidebar.text_input(
+                    f'{param_name}',
+                    value=str(param_default)
+                )
 
     # Convert parameters to appropriate types
     strategy_params = {param_name: to_number(strategy_params[param_name]) for param_name in strategy_params}
