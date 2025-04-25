@@ -206,7 +206,7 @@ def get_stock_data(ticker, start_date, end_date):
         DataFrame: Historical price data with OHLCV format
     """
     try:
-        df = yf.download(ticker, start=start_date, end=end_date)
+        df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False)
 
         # Rename columns to match backtrader's expected format
         df = df.rename(columns={
