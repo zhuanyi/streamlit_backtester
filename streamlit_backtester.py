@@ -7,14 +7,72 @@ import matplotlib
 # Use non-interactive backend
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import os
-import sys
-import inspect
 from datetime import datetime, timedelta
 
+# Import necessary libraries for strategies
+import math
+from scipy import stats
+
+
+class BaseStrategy(bt.Strategy):
+    """
+    Base strategy class that implements common functionality for all strategies
+    """
+    params = (
+        ('order_percentage', 0.95),  # Percentage of portfolio to allocate per trade
+        ('ticker', 'SPY'),  # Ticker for the strategy
+    )
+
+    def __init__(self):
+        # Common initialization
+        self.order = None
+        self.price = None
+        self.comm = None
+
+        # Trade tracking
+        self.trades = []
+
+    def notify_order(self, order):
+        if order.status in [order.Completed]:
+            if order.isbuy():
+                self.log(
+                    f'BUY EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+                trade_info = {
+                    'datetime': self.datas[0].datetime.date(0),
+                    'type': 'buy',
+                    'price': order.executed.price,
+                    'size': order.executed.size,
+                    'value': order.executed.value,
+                    'commission': order.executed.comm,
+                    'net_value': order.executed.value + order.executed.comm
+                }
+                self.trades.append(trade_info)
+            else:  # Sell
+                self.log(
+                    f'SELL EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+                trade_info = {
+                    'datetime': self.datas[0].datetime.date(0),
+                    'type': 'sell',
+                    'price': order.executed.price,
+                    'size': order.executed.size,
+                    'value': order.executed.value,
+                    'commission': order.executed.comm,
+                    'net_value': order.executed.value - order.executed.comm
+                }
+                self.trades.append(trade_info)
+
+        # Reset the order attribute
+        self.order = None
+
+    def log(self, txt):
+        """
+        Logging function for debugging
+        """
+        dt = self.datas[0].datetime.date(0)
+        print(f'{dt.isoformat()}: {txt}')
 
 # Create a strategies module to house your trading strategies
-class MovingAverageCrossStrategy(bt.Strategy):
+class MovingAverageCrossStrategy(BaseStrategy):
     """
     A strategy that generates signals based on moving average crossovers
     """
@@ -26,6 +84,9 @@ class MovingAverageCrossStrategy(bt.Strategy):
     )
 
     def __init__(self):
+        # Call the parent class's init method
+        super(MovingAverageCrossStrategy, self).__init__()
+
         # Initialize indicators
         self.fast_ma = bt.indicators.SimpleMovingAverage(
             self.data.close, period=self.params.fast
@@ -37,10 +98,6 @@ class MovingAverageCrossStrategy(bt.Strategy):
         # Cross signals
         self.crossover = bt.indicators.CrossOver(self.fast_ma, self.slow_ma)
 
-        # Track order, position, and trade status
-        self.order = None
-        self.price = None
-        self.comm = None
 
     def next(self):
         # Check if we already have an open order
@@ -63,15 +120,8 @@ class MovingAverageCrossStrategy(bt.Strategy):
                 self.order = self.sell(size=self.position.size)
                 self.log(f'SELL ORDER CREATED, Size: {self.position.size}')
 
-    def log(self, txt):
-        """
-        Logging function for debugging
-        """
-        dt = self.datas[0].datetime.date(0)
-        print(f'{dt.isoformat()}: {txt}')
 
-
-class MomentumStrategy(bt.Strategy):
+class MomentumStrategy(BaseStrategy):
     """
     A strategy that buys stocks showing strong momentum and sells on momentum weakening
     """
@@ -84,12 +134,17 @@ class MomentumStrategy(bt.Strategy):
     )
 
     def __init__(self):
+        # Call the parent class's init method
+        super(MomentumStrategy, self).__init__()
+
         # Calculate momentum (rate of change over lookback period)
         self.momentum = bt.indicators.RateOfChange(self.data.close, period=self.params.lookback)
 
         # Track order, position, and trade status
         self.order = None
         self.historical_momentum = []
+
+
 
     def next(self):
         # Check if we already have an open order
@@ -125,15 +180,8 @@ class MomentumStrategy(bt.Strategy):
                 self.log(
                     f'SELL ORDER CREATED, Size: {self.position.size}, Momentum Percentile: {momentum_percentile:.2f}')
 
-    def log(self, txt):
-        """
-        Logging function for debugging
-        """
-        dt = self.datas[0].datetime.date(0)
-        print(f'{dt.isoformat()}: {txt}')
 
-
-class RSIStrategy(bt.Strategy):
+class RSIStrategy(BaseStrategy):
     """
     A strategy that buys when RSI is oversold and sells when RSI is overbought
     """
@@ -146,6 +194,9 @@ class RSIStrategy(bt.Strategy):
     )
 
     def __init__(self):
+        # Call the parent class's init method
+        super(RSIStrategy, self).__init__()
+
         # Calculate RSI
         self.rsi = bt.indicators.RSI(self.data.close, period=self.params.period)
 
@@ -173,17 +224,6 @@ class RSIStrategy(bt.Strategy):
                 self.order = self.sell(size=self.position.size)
                 self.log(f'SELL ORDER CREATED, Size: {self.position.size}, RSI: {self.rsi[0]:.2f}')
 
-    def log(self, txt):
-        """
-        Logging function for debugging
-        """
-        dt = self.datas[0].datetime.date(0)
-        print(f'{dt.isoformat()}: {txt}')
-
-
-# Import necessary libraries for strategies
-import math
-from scipy import stats
 
 # Add our strategies
 strategies = {
@@ -301,12 +341,53 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
     # Calculate cumulative returns
     returns_df['Cumulative'] = (1 + returns_df['Return']).cumprod()
 
+    # Extract trade data for plotting
+    trades_df = pd.DataFrame(strat.trades)
+
     # Plot results
     fig = plt.figure(figsize=(10, 8))
 
     # Plot equity curve
     ax1 = fig.add_subplot(211)
     ax1.plot(returns_df.index, returns_df['Cumulative'], label='Equity Curve')
+
+    # Add buy/sell markers if we have trade data
+    if not trades_df.empty:
+        # Convert dates for plotting
+        trades_df['plot_date'] = pd.to_datetime(trades_df['datetime'])
+
+        # Get price data for arrow positioning
+        price_data = df.set_index('datetime')
+        price_data.index = pd.to_datetime(price_data.index)
+
+        # Plot buy signals
+        buy_signals = trades_df[trades_df['type'] == 'buy']
+        if not buy_signals.empty:
+            for idx, trade in buy_signals.iterrows():
+                try:
+                    date = trade['plot_date']
+                    # Find the equity value on this date
+                    equity_value = returns_df.loc[date:date, 'Cumulative'].iloc[0]
+                    ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value * 0.95),
+                                 arrowprops=dict(arrowstyle='->', color='green', lw=2))
+                except (KeyError, IndexError) as e:
+                    # Handle date not found in returns
+                    continue
+
+        # Plot sell signals
+        sell_signals = trades_df[trades_df['type'] == 'sell']
+        if not sell_signals.empty:
+            for idx, trade in sell_signals.iterrows():
+                try:
+                    date = trade['plot_date']
+                    # Find the equity value on this date
+                    equity_value = returns_df.loc[date:date, 'Cumulative'].iloc[0]
+                    ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value * 1.05),
+                                 arrowprops=dict(arrowstyle='->', color='red', lw=2))
+                except (KeyError, IndexError) as e:
+                    # Handle date not found in returns
+                    continue
+
     ax1.set_title(f'Backtest Results: {ticker} - {strategy_class.__name__}')
     ax1.set_ylabel('Portfolio Value')
     ax1.legend()
@@ -332,7 +413,7 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.15)
 
-    return fig
+    return fig, trades_df  # Return both the figure and trade data
 
 
 def main():
@@ -426,18 +507,60 @@ def main():
 
         # Run the backtest
         try:
-            fig = run_backtest(selected_strategy_class, ticker, start_date, end_date, **strategy_params)
+            fig, trades_df = run_backtest(selected_strategy_class, ticker, start_date, end_date, **strategy_params)
 
             # Update progress
             progress_bar.progress(90)
 
             if fig:
-                st.pyplot(fig)
-                st.success("Backtest completed successfully!")
+                # Create tabs for results and trades
+                tab1, tab2 = st.tabs(["Performance", "Trade Log"])
+
+                with tab1:
+                    st.pyplot(fig)
+                    st.success("Backtest completed successfully!")
+
+                with tab2:
+                    if not trades_df.empty:
+                        # Format the dataframe for display
+                        display_df = trades_df.copy()
+                        display_df['datetime'] = pd.to_datetime(display_df['datetime']).dt.strftime('%Y-%m-%d')
+                        display_df['price'] = display_df['price'].map('${:.2f}'.format)
+                        display_df['value'] = display_df['value'].map('${:.2f}'.format)
+                        display_df['commission'] = display_df['commission'].map('${:.2f}'.format)
+                        display_df['net_value'] = display_df['net_value'].map('${:.2f}'.format)
+                        display_df = display_df.rename(columns={
+                            'datetime': 'Date',
+                            'type': 'Action',
+                            'price': 'Price',
+                            'size': 'Shares',
+                            'value': 'Value',
+                            'commission': 'Commission',
+                            'net_value': 'Net Value'
+                        })
+
+                        # Display the trade log
+                        st.write("### Trade Log")
+                        st.dataframe(display_df)
+
+                        # Add download button
+                        csv = trades_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download Trade Data",
+                            data=csv,
+                            file_name=f"{ticker}_{selected_strategy_name}_trades.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        st.write("No trades were executed during this backtest period.")
             else:
                 st.error("Backtest failed. Please check your inputs and try again.")
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
             st.error(f"An error occurred during the backtest: {str(e)}")
+            st.error(f"Error details:\n```\n{error_details}\n```")
+
 
         # Complete progress
         progress_bar.progress(100)
