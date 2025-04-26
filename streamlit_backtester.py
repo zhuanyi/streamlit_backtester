@@ -368,8 +368,10 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
                     date = trade['plot_date']
                     # Find the equity value on this date
                     equity_value = returns_df.loc[date:date, 'Cumulative'].iloc[0]
-                    ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value * 0.95),
-                                 arrowprops=dict(arrowstyle='->', color='green', lw=2))
+                    # Use a small fixed offset for the arrow tail (approximately "--" length)
+                    y_offset = equity_value * 0.01  # Small percentage offset
+                    ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value - y_offset),
+                                 arrowprops=dict(arrowstyle='->', color='green', lw=1.5))
                 except (KeyError, IndexError) as e:
                     # Handle date not found in returns
                     continue
@@ -382,8 +384,10 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
                     date = trade['plot_date']
                     # Find the equity value on this date
                     equity_value = returns_df.loc[date:date, 'Cumulative'].iloc[0]
-                    ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value * 1.05),
-                                 arrowprops=dict(arrowstyle='->', color='red', lw=2))
+                    # Use a small fixed offset for the arrow tail (approximately "--" length)
+                    y_offset = equity_value * 0.01  # Small percentage offset
+                    ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value + y_offset),
+                                 arrowprops=dict(arrowstyle='->', color='red', lw=1.5))
                 except (KeyError, IndexError) as e:
                     # Handle date not found in returns
                     continue
