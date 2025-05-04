@@ -3,6 +3,7 @@ import pandas as pd
 import backtrader as bt
 import yfinance as yf
 import matplotlib
+from curl_cffi import requests
 
 # Use non-interactive backend
 matplotlib.use('Agg')
@@ -246,7 +247,9 @@ def get_stock_data(ticker, start_date, end_date):
         DataFrame: Historical price data with OHLCV format
     """
     try:
-        df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False)
+        # 20250503 - Quick and dirty fix per: https://github.com/ranaroussi/yfinance/issues/2422#issuecomment-2840774505
+        session = requests.Session(impersonate="chrome")
+        df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False, session=session)
 
         # Rename columns to match backtrader's expected format
         df = df.rename(columns={
