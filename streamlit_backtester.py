@@ -1,20 +1,19 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import backtrader as bt
 import yfinance as yf
 import matplotlib
-from curl_cffi import requests
 
 # Use non-interactive backend
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-
-# Import necessary libraries for strategies
 import math
 from scipy import stats
 
 
+# Create a base strategy class that will be inherited by all other strategies
 class BaseStrategy(bt.Strategy):
     """
     Base strategy class that implements common functionality for all strategies
@@ -72,7 +71,8 @@ class BaseStrategy(bt.Strategy):
         dt = self.datas[0].datetime.date(0)
         print(f'{dt.isoformat()}: {txt}')
 
-# Create a strategies module to house your trading strategies
+
+# Create strategies that inherit from the base strategy
 class MovingAverageCrossStrategy(BaseStrategy):
     """
     A strategy that generates signals based on moving average crossovers
@@ -80,8 +80,6 @@ class MovingAverageCrossStrategy(BaseStrategy):
     params = (
         ('fast', 10),  # Fast moving average period
         ('slow', 30),  # Slow moving average period
-        ('order_percentage', 0.95),  # Percentage of portfolio to allocate per trade
-        ('ticker', 'SPY'),  # Ticker for the strategy
     )
 
     def __init__(self):
@@ -98,7 +96,6 @@ class MovingAverageCrossStrategy(BaseStrategy):
 
         # Cross signals
         self.crossover = bt.indicators.CrossOver(self.fast_ma, self.slow_ma)
-
 
     def next(self):
         # Check if we already have an open order
@@ -130,8 +127,6 @@ class MomentumStrategy(BaseStrategy):
         ('lookback', 90),  # Lookback period for momentum calculation
         ('percentile', 80),  # Percentile threshold for entry (0-100)
         ('exit_percentile', 50),  # Percentile threshold for exit (0-100)
-        ('order_percentage', 0.95),  # Percentage of portfolio to allocate per trade
-        ('ticker', 'SPY'),  # Ticker for the strategy
     )
 
     def __init__(self):
@@ -141,11 +136,8 @@ class MomentumStrategy(BaseStrategy):
         # Calculate momentum (rate of change over lookback period)
         self.momentum = bt.indicators.RateOfChange(self.data.close, period=self.params.lookback)
 
-        # Track order, position, and trade status
-        self.order = None
+        # Historical momentum list
         self.historical_momentum = []
-
-
 
     def next(self):
         # Check if we already have an open order
@@ -190,8 +182,6 @@ class RSIStrategy(BaseStrategy):
         ('period', 14),  # RSI calculation period
         ('overbought', 70),  # Overbought threshold
         ('oversold', 30),  # Oversold threshold
-        ('order_percentage', 0.95),  # Percentage of portfolio to allocate per trade
-        ('ticker', 'SPY'),  # Ticker for the strategy
     )
 
     def __init__(self):
@@ -200,9 +190,6 @@ class RSIStrategy(BaseStrategy):
 
         # Calculate RSI
         self.rsi = bt.indicators.RSI(self.data.close, period=self.params.period)
-
-        # Track order, position, and trade status
-        self.order = None
 
     def next(self):
         # Check if we already have an open order
@@ -234,7 +221,7 @@ strategies = {
 }
 
 
-def get_stock_data(ticker, start_date, end_date):
+def get_stock_data(ticker, start_date, end_date, demo_mode=False):
     """
     Get historical stock data for backtesting
 
@@ -242,35 +229,129 @@ def get_stock_data(ticker, start_date, end_date):
         ticker: Stock ticker symbol
         start_date: Start date for data retrieval
         end_date: End date for data retrieval
+        demo_mode: If True, load from static CSV instead of Yahoo Finance
 
     Returns:
         DataFrame: Historical price data with OHLCV format
     """
     try:
-        # 20250503 - Quick and dirty fix per: https://github.com/ranaroussi/yfinance/issues/2422#issuecomment-2840774505
-        session = requests.Session(impersonate="chrome")
-        df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False, session=session)
+        if demo_mode:
+            # Use static demo data
+            df = get_demo_data(ticker)
 
-        # Rename columns to match backtrader's expected format
-        df = df.rename(columns={
-            'Open': 'open',
-            'High': 'high',
-            'Low': 'low',
-            'Close': 'close',
-            'Volume': 'volume'
-        })
+            # Filter by date range
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df = df[(df['datetime'] >= pd.Timestamp(start_date)) & (df['datetime'] <= pd.Timestamp(end_date))]
 
-        # Reset index to make date a column
-        df = df.reset_index()
-        df = df.rename(columns={'Date': 'datetime'})
+            if len(df) == 0:
+                st.warning(f"No demo data available for the selected date range. Using all available demo data.")
+                df = get_demo_data(ticker)  # Use all demo data
 
-        return df
+            return df
+        else:
+            # Get data from Yahoo Finance
+            df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False)
+
+            # Rename columns to match backtrader's expected format
+            df = df.rename(columns={
+                'Open': 'open',
+                'High': 'high',
+                'Low': 'low',
+                'Close': 'close',
+                'Volume': 'volume'
+            })
+
+            # Reset index to make date a column
+            df = df.reset_index()
+            df = df.rename(columns={'Date': 'datetime'})
+
+            return df
     except Exception as e:
         st.error(f"Failed to download data for {ticker}: {str(e)}")
         return None
 
 
-def run_backtest(strategy_class, ticker, start_date, end_date, **params):
+def get_demo_data(ticker):
+    """
+    Return static demo data for the given ticker
+
+    Parameters:
+        ticker: Stock ticker symbol (only SPY is supported in demo mode)
+
+    Returns:
+        DataFrame: Static historical price data
+    """
+    # Create a default demo dataset for SPY (normally you would load this from a file)
+    # This is a simplified example, in production you would load from a saved CSV
+
+    # For this example, we'll generate some synthetic data
+    # In reality, you should save actual data from Yahoo Finance to a CSV and load it here
+
+    # Generate some dates
+    start_date = datetime(2020, 1, 1)
+    end_date = datetime(2021, 12, 31)
+
+    # Create date range
+    dates = pd.date_range(start=start_date, end=end_date, freq='B')  # Business days
+
+    # Create synthetic price data with some trend and volatility
+    np.random.seed(42)  # For reproducibility
+
+    # Start price
+    price = 300.0
+
+    # Lists to store data
+    opens = []
+    highs = []
+    lows = []
+    closes = []
+    volumes = []
+
+    # Generate synthetic OHLCV data
+    for i in range(len(dates)):
+        # Daily volatility
+        daily_vol = price * 0.01
+
+        # Generate OHLC
+        open_price = price
+        high_price = open_price + abs(np.random.normal(0, daily_vol))
+        low_price = open_price - abs(np.random.normal(0, daily_vol))
+        close_price = np.random.normal((high_price + low_price) / 2, daily_vol / 2)
+
+        # Ensure logical prices (high >= open, close, low and low <= open, close)
+        high_price = max(high_price, open_price, close_price)
+        low_price = min(low_price, open_price, close_price)
+
+        # Add some trend
+        if i % 100 < 50:  # Uptrend for 50 days
+            price = close_price * (1 + np.random.normal(0.0005, 0.001))  # Slight upward bias
+        else:  # Downtrend for 50 days
+            price = close_price * (1 + np.random.normal(-0.0005, 0.001))  # Slight downward bias
+
+        # Volume (higher during big price moves)
+        volume = int(np.random.normal(1000000, 200000) * (1 + abs((close_price - open_price) / open_price) * 10))
+
+        # Append to lists
+        opens.append(open_price)
+        highs.append(high_price)
+        lows.append(low_price)
+        closes.append(close_price)
+        volumes.append(volume)
+
+    # Create DataFrame
+    df = pd.DataFrame({
+        'datetime': dates,
+        'open': opens,
+        'high': highs,
+        'low': lows,
+        'close': closes,
+        'volume': volumes
+    })
+
+    return df
+
+
+def run_backtest(strategy_class, ticker, start_date, end_date, demo_mode=False, **params):
     """
     Run a backtest for the specified strategy and parameters
 
@@ -279,23 +360,24 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
         ticker: Stock ticker symbol
         start_date: Start date for backtest
         end_date: End date for backtest
+        demo_mode: If True, use static demo data
         **params: Strategy parameters
 
     Returns:
-        Matplotlib figure: Plot of backtest results
+        tuple: (Matplotlib figure, DataFrame of trades)
     """
     # Initialize Cerebro engine
     cerebro = bt.Cerebro()
 
-    # Set commission to 0 (can be adjusted for realistic backtest)
+    # Set commission
     cerebro.broker.setcommission(commission=0.001)  # 0.1% commission
 
     # Get data
-    df = get_stock_data(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+    df = get_stock_data(ticker, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), demo_mode)
 
     if df is None or len(df) == 0:
         st.error(f"No data available for {ticker} during the specified period.")
-        return None
+        return None, None
 
     # Create a backtrader data feed
     data = bt.feeds.PandasData(
@@ -344,24 +426,27 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
     # Calculate cumulative returns
     returns_df['Cumulative'] = (1 + returns_df['Return']).cumprod()
 
-    # Extract trade data for plotting
-    trades_df = pd.DataFrame(strat.trades)
+    # Extract trade data
+    trades_df = pd.DataFrame(strat.trades) if hasattr(strat, 'trades') and strat.trades else pd.DataFrame()
 
-    # Plot results
-    fig = plt.figure(figsize=(10, 8))
+    # Plot results with dynamic figure size
+    fig = plt.figure(figsize=(10, 8))  # Default figsize, will be resized via Streamlit
 
     # Plot equity curve
     ax1 = fig.add_subplot(211)
     ax1.plot(returns_df.index, returns_df['Cumulative'], label='Equity Curve')
+    if demo_mode:
+        ax1.set_title(f'Backtest Results (DEMO DATA): {ticker} - {strategy_class.__name__}')
+    else:
+        ax1.set_title(f'Backtest Results: {ticker} - {strategy_class.__name__}')
+    ax1.set_ylabel('Portfolio Value')
+    ax1.legend()
+    ax1.grid(True)
 
     # Add buy/sell markers if we have trade data
     if not trades_df.empty:
         # Convert dates for plotting
         trades_df['plot_date'] = pd.to_datetime(trades_df['datetime'])
-
-        # Get price data for arrow positioning
-        price_data = df.set_index('datetime')
-        price_data.index = pd.to_datetime(price_data.index)
 
         # Plot buy signals
         buy_signals = trades_df[trades_df['type'] == 'buy']
@@ -371,8 +456,10 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
                     date = trade['plot_date']
                     # Find the equity value on this date
                     equity_value = returns_df.loc[date:date, 'Cumulative'].iloc[0]
-                    # Use a small fixed offset for the arrow tail (approximately "--" length)
+
+                    # Use a small fixed offset for the arrow tail
                     y_offset = equity_value * 0.01  # Small percentage offset
+
                     ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value - y_offset),
                                  arrowprops=dict(arrowstyle='->', color='green', lw=1.5))
                 except (KeyError, IndexError) as e:
@@ -387,18 +474,15 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
                     date = trade['plot_date']
                     # Find the equity value on this date
                     equity_value = returns_df.loc[date:date, 'Cumulative'].iloc[0]
-                    # Use a small fixed offset for the arrow tail (approximately "--" length)
+
+                    # Use a small fixed offset for the arrow tail
                     y_offset = equity_value * 0.01  # Small percentage offset
+
                     ax1.annotate('', xy=(date, equity_value), xytext=(date, equity_value + y_offset),
                                  arrowprops=dict(arrowstyle='->', color='red', lw=1.5))
                 except (KeyError, IndexError) as e:
                     # Handle date not found in returns
                     continue
-
-    ax1.set_title(f'Backtest Results: {ticker} - {strategy_class.__name__}')
-    ax1.set_ylabel('Portfolio Value')
-    ax1.legend()
-    ax1.grid(True)
 
     # Plot returns
     ax2 = fig.add_subplot(212)
@@ -420,7 +504,7 @@ def run_backtest(strategy_class, ticker, start_date, end_date, **params):
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.15)
 
-    return fig, trades_df  # Return both the figure and trade data
+    return fig, trades_df
 
 
 def main():
@@ -434,24 +518,15 @@ def main():
     # Sidebar for strategy selection and parameters
     st.sidebar.header('Strategy Configuration')
 
+    # Demo mode toggle
+    demo_mode = st.sidebar.checkbox('Demo Mode (Use Static Data)', False)
+
+    if demo_mode:
+        st.sidebar.info("Demo mode is enabled. Using static data instead of live Yahoo Finance data.")
+
     # Strategy selection
     selected_strategy_name = st.sidebar.selectbox('Select Strategy', list(strategies.keys()))
     selected_strategy_class = strategies[selected_strategy_name]
-
-    # Helper function to convert string to appropriate number type
-    def to_number(s):
-        """Convert string to appropriate number type if possible"""
-        if isinstance(s, (int, float)):  # Already a number
-            return s
-
-        if not isinstance(s, str):  # If not a string (e.g., tuple), return as is
-            return s
-
-        try:
-            n = float(s)
-            return int(n) if n.is_integer() else n
-        except ValueError:
-            return s
 
     # Get strategy parameters
     strategy_params = {}
@@ -484,13 +559,14 @@ def main():
                     value=str(param_default)
                 )
 
-    # Convert parameters to appropriate types
-    strategy_params = {param_name: to_number(strategy_params[param_name]) for param_name in strategy_params}
-
     # Get ticker and date range
     st.sidebar.header('Backtest Configuration')
 
-    ticker = st.sidebar.text_input('Enter ticker symbol (e.g., AAPL, MSFT, AMZN, ...)', 'SPY')
+    if demo_mode:
+        ticker = st.sidebar.selectbox('Select demo ticker:', ['SPY'])
+        st.sidebar.warning("Only SPY is available in demo mode")
+    else:
+        ticker = st.sidebar.text_input('Enter ticker symbol (e.g., AAPL, MSFT, AMZN, ...)', 'SPY')
 
     start_date = st.sidebar.date_input(
         'Select start date:',
@@ -504,7 +580,11 @@ def main():
 
     # Run backtest button
     if st.sidebar.button('Run Backtest'):
-        st.info(f"Running backtest on {ticker} from {start_date} to {end_date} using {selected_strategy_name}")
+        if demo_mode:
+            st.info(
+                f"Running backtest on {ticker} (DEMO DATA) from {start_date} to {end_date} using {selected_strategy_name}")
+        else:
+            st.info(f"Running backtest on {ticker} from {start_date} to {end_date} using {selected_strategy_name}")
 
         # Create a progress bar
         progress_bar = st.progress(0)
@@ -514,7 +594,8 @@ def main():
 
         # Run the backtest
         try:
-            fig, trades_df = run_backtest(selected_strategy_class, ticker, start_date, end_date, **strategy_params)
+            fig, trades_df = run_backtest(selected_strategy_class, ticker, start_date, end_date, demo_mode,
+                                          **strategy_params)
 
             # Update progress
             progress_bar.progress(90)
@@ -524,7 +605,12 @@ def main():
                 tab1, tab2 = st.tabs(["Performance", "Trade Log"])
 
                 with tab1:
-                    st.pyplot(fig)
+                    # Use Streamlit's built-in functionality for responsive charts
+                    st.pyplot(fig, use_container_width=True)
+
+                    if demo_mode:
+                        st.warning("This backtest is using DEMO DATA and does not reflect real market conditions.")
+
                     st.success("Backtest completed successfully!")
 
                 with tab2:
@@ -548,7 +634,11 @@ def main():
 
                         # Display the trade log
                         st.write("### Trade Log")
-                        st.dataframe(display_df)
+                        if demo_mode:
+                            st.warning(
+                                "DEMO DATA: This trade log is based on synthetic data and does not reflect real trades.")
+
+                        st.dataframe(display_df, use_container_width=True)
 
                         # Add download button
                         csv = trades_df.to_csv(index=False)
@@ -567,7 +657,6 @@ def main():
             error_details = traceback.format_exc()
             st.error(f"An error occurred during the backtest: {str(e)}")
             st.error(f"Error details:\n```\n{error_details}\n```")
-
 
         # Complete progress
         progress_bar.progress(100)
@@ -595,6 +684,11 @@ def main():
     3. Enter a ticker symbol (e.g., AAPL, MSFT, SPY)
     4. Set the backtest date range
     5. Click "Run Backtest"
+
+    ### Demo Mode:
+
+    Toggle "Demo Mode" in the sidebar to use static data instead of live Yahoo Finance data. 
+    This is useful for demonstration purposes or when you don't have internet access.
     """)
 
 
