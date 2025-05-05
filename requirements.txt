@@ -66,5 +66,5 @@ urllib3==2.2.3
 virtualenv==20.23.0
 watchdog==6.0.0
 XlsxWriter==3.2.3
-yfinance==0.2.56
+yfinance==0.2.58
 curl_cffi
