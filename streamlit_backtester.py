@@ -434,7 +434,7 @@ def run_backtest(strategy_class, ticker, start_date, end_date, demo_mode=False, 
 
     # Plot equity curve
     ax1 = fig.add_subplot(211)
-    ax1.plot(returns_df.index, returns_df['Cumulative'], label='Equity Curve')
+    ax1.plot(returns_df.index, returns_df['Cumulative'], label=f'{ticker} Prices')
     if demo_mode:
         ax1.set_title(f'Backtest Results (DEMO DATA): {ticker} - {strategy_class.__name__}')
     else:
