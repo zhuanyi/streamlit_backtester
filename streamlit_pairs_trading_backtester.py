@@ -7,8 +7,6 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-import math
-from scipy import stats
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
 
@@ -61,7 +59,7 @@ class PairsTradingStrategy(BaseStrategy):
         self.data1 = self.datas[0]
         self.data2 = self.datas[1]
 
-        self.spread = bt.indicators.Per(self.data1.close) - bt.indicators.log(self.data2.close)
+        self.spread = np.log(1+bt.indicators.PctChange(self.data1.close)) - np.log(1+bt.indicators.PctChange(self.data2.close))
         self.zscore = (self.spread - bt.indicators.SMA(self.spread, period=self.p.slow)) / \
                       bt.indicators.StdDev(self.spread, period=self.p.fast)
 
@@ -225,7 +223,7 @@ def main():
     })
 
     st.sidebar.header("Backtest Configuration")
-    ticker1 = st.sidebar.text_input("Ticker 1 (H-share, e.g., 00700.HK)", "00700.HK")
+    ticker1 = st.sidebar.text_input("Ticker 1 (H-share, e.g., 0700.HK)", "0700.HK")
     ticker2 = st.sidebar.text_input("Ticker 2 (A-share, e.g., 600519.SS)", "600519.SS")
 
     start_date = st.sidebar.date_input("Start Date", datetime.now() - timedelta(days=365))
