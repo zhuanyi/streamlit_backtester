@@ -49,9 +49,10 @@ class PairsTradingStrategy(BaseStrategy):
         ('slow', 60),
         ('zscore_high', 2.0),
         ('zscore_low', -2.0),
-        ('ticker1', '00700.HK'),  # H-share
-        ('ticker2', '600519.SS'),  # A-share
-        ('use_regime', True)
+        ('ticker1', '00700.HK'),
+        ('ticker2', '600519.SS'),
+        ('use_regime', True),
+        ('regime_check_interval', 20)  # New parameter
     )
 
     def __init__(self):
@@ -59,33 +60,58 @@ class PairsTradingStrategy(BaseStrategy):
         self.data1 = self.datas[0]
         self.data2 = self.datas[1]
 
-        self.spread = np.log(1+bt.indicators.PctChange(self.data1.close)) - np.log(1+bt.indicators.PctChange(self.data2.close))
-        self.zscore = (self.spread - bt.indicators.SMA(self.spread, period=self.p.slow)) / \
-                      bt.indicators.StdDev(self.spread, period=self.p.fast)
+        # More efficient calculation
+        self.pct1 = bt.indicators.PctChange(self.data1.close)
+        self.pct2 = bt.indicators.PctChange(self.data2.close)
+        self.spread = bt.indicators.OperationN(lambda x, y: np.log(1 + x) - np.log(1 + y), self.pct1, self.pct2)
+
+        self.sma = bt.indicators.SMA(self.spread, period=self.p.slow)
+        self.stddev = bt.indicators.StdDev(self.spread, period=self.p.fast)
+
+        # Add safeguard against division by zero
+        self.zscore = bt.indicators.DivByZero(self.spread - self.sma, self.stddev, zero=0.0)
 
         self.use_regime = self.p.use_regime
         self.regimes = []
+        self.last_regime_check = 0
+        self.current_regime = 0
+        self.min_bars_required = max(self.p.fast, self.p.slow, 100)  # Minimum bars needed
 
     def next(self):
         if self.order:
             return
 
+        # Make sure we have enough data
+        if len(self) < self.min_bars_required:
+            return
+
         z = self.zscore[0]
         date = self.datas[0].datetime.date(0)
 
-        # Markov regime detection
-        if self.use_regime and len(self.spread.get(size=100)) == 100:
-            df_spread = pd.Series([self.spread[i] for i in range(-99, 1)])
-            try:
-                model = MarkovRegression(df_spread, k_regimes=2, trend='c', switching_trend=True)
-                result = model.fit(disp=False)
-                probs = result.filtered_marginal_probabilities
-                current_state = probs.idxmax(axis=1).iloc[-1]
-                self.regimes.append((date, current_state))
-                if current_state == 1:
-                    return  # Skip high volatility regime
-            except Exception as e:
-                pass  # Default to normal behavior
+        # Markov regime detection - FIXED VERSION
+        if self.use_regime and len(self) >= 100:
+            bar_count = len(self)
+            if bar_count - self.last_regime_check >= self.p.regime_check_interval:
+                self.last_regime_check = bar_count
+                try:
+                    # Get the last 100 values of spread
+                    spread_values = [self.spread[i] for i in range(-99, 1)]
+                    if all(not np.isnan(x) for x in spread_values):  # Check for NaN values
+                        df_spread = pd.Series(spread_values)
+                        model = MarkovRegression(df_spread, k_regimes=2, trend='c', switching_trend=True)
+                        result = model.fit(disp=False)
+                        probs = result.filtered_marginal_probabilities
+
+                        if not probs.empty:
+                            self.current_regime = probs.idxmax(axis=1).iloc[-1]
+                            self.regimes.append((date, self.current_regime))
+                except Exception as e:
+                    # Just log and continue
+                    self.log(f"Regime detection error: {e}")
+
+            # Use cached regime state
+            if self.current_regime == 1:
+                return  # Skip high volatility regime
 
         # Trade logic
         if not self.position:
@@ -168,26 +194,33 @@ def run_backtest(strategy_class, ticker1, ticker2, start_date, end_date, demo_mo
     # Generate plot
     fig, ax = plt.subplots(2, 1, figsize=(12, 8))
 
+    # Make sure we have data to plot
     spread_series = np.array(strat.spread.array)
     zscores = np.array(strat.zscore.array)
 
-    ax[0].plot(spread_series, label="Spread", color='blue')
-    ax[0].axhline(np.mean(spread_series), color='gray', linestyle='--')
-    ax[0].set_title("Spread Between Assets")
-    ax[0].grid(True)
+    if len(spread_series) > 0:
+        ax[0].plot(spread_series, label="Spread", color='blue')
+        ax[0].axhline(np.mean(spread_series), color='gray', linestyle='--')
+        ax[0].set_title("Spread Between Assets")
+        ax[0].grid(True)
 
-    ax[1].plot(zscores, label="Z-Score", color='green')
-    ax[1].axhline(strat.params.zscore_high, color='red', linestyle='--', label='+2σ Threshold')
-    ax[1].axhline(strat.params.zscore_low, color='red', linestyle='--', label='-2σ Threshold')
-    ax[1].legend()
-    ax[1].set_title("Z-Score of Spread")
-    ax[1].grid(True)
+    if len(zscores) > 0:
+        ax[1].plot(zscores, label="Z-Score", color='green')
+        ax[1].axhline(strat.params.zscore_high, color='red', linestyle='--', label='+2σ Threshold')
+        ax[1].axhline(strat.params.zscore_low, color='red', linestyle='--', label='-2σ Threshold')
+        ax[1].legend()
+        ax[1].set_title("Z-Score of Spread")
+        ax[1].grid(True)
 
     plt.tight_layout()
 
-    # ADF Test
-    adf_result = adfuller(spread_series)
-    st.write(f"Augmented Dickey-Fuller p-value: {adf_result[1]:.4f} → {'Mean-Reverting' if adf_result[1] < 0.05 else 'Not Mean-Reverting'}")
+    # ADF Test - only run if we have enough data
+    if len(spread_series) > 10:  # Minimum required for ADF test
+        adf_result = adfuller(spread_series)
+        st.write(
+            f"Augmented Dickey-Fuller p-value: {adf_result[1]:.4f} → {'Mean-Reverting' if adf_result[1] < 0.05 else 'Not Mean-Reverting'}")
+    else:
+        st.write("Not enough data for ADF test")
 
     if hasattr(strat, 'regimes') and strat.use_regime:
         st.write("Detected Regime Changes:")
