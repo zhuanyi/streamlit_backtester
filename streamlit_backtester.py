@@ -500,12 +500,14 @@ def run_backtest(strategy_class, ticker, start_date, end_date, demo_mode=False, 
     # Add text with summary statistics
     sharpe_ratio = sharpe.get('sharperatio') if sharpe else None
     max_dd = drawdown.get('max', {}).get('drawdown') if drawdown else None
+    sharpe_str = f"{sharpe_ratio:.2f}" if sharpe_ratio is not None else 'N/A'
+    dd_str = f"{max_dd:.2%}" if max_dd is not None else 'N/A'
     stats_text = (
         f"Initial Capital: $100,000\n"
         f"Final Value: ${cerebro.broker.getvalue():,.2f}\n"
         f"Total Return: {cerebro.broker.getvalue() / 100000 - 1:.2%}\n"
-        f"Sharpe Ratio: {sharpe_ratio:.2f if sharpe_ratio is not None else 'N/A'}\n"
-        f"Max Drawdown: {max_dd:.2f% if max_dd is not None else 'N/A'}"
+        f"Sharpe Ratio: {sharpe_str}\n"
+        f"Max Drawdown: {dd_str}"
     )
 
     plt.figtext(0.15, 0.02, stats_text, fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
