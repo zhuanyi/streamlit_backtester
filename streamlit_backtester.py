@@ -233,6 +233,7 @@ def get_stock_data(ticker, start_date, end_date, demo_mode=False):
 
     Returns:
         DataFrame: Historical price data with OHLCV format
+        None: If data retrieval fails
     """
     try:
         if demo_mode:
@@ -249,8 +250,27 @@ def get_stock_data(ticker, start_date, end_date, demo_mode=False):
 
             return df
         else:
-            # Get data from Yahoo Finance
-            df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False)
+            # Get data from Yahoo Finance - use period-based approach for more reliable results
+            # Calculate period in days for more reliable fetching
+            start = pd.Timestamp(start_date)
+            end = pd.Timestamp(end_date)
+            period_days = (end - start).days
+
+            # yfinance sometimes has issues with date ranges, try multiple approaches
+            df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False, timeout=30)
+
+            # If we got limited data, try with period parameter
+            if df is None or len(df) < period_days * 0.5:  # Less than ~50% of expected trading days
+                st.warning(f"Limited data received from Yahoo Finance. Trying alternative fetch method...")
+                # Try fetching with max period and then filter
+                df = yf.download(ticker, period='max', multi_level_index=False, timeout=30)
+                if df is not None and len(df) > 0:
+                    # Filter to requested date range
+                    df = df.loc[start:end]
+
+            if df is None or len(df) == 0:
+                st.error(f"No data available for {ticker}. The ticker may be invalid or delisted.")
+                return None
 
             # Rename columns to match backtrader's expected format
             df = df.rename(columns={
