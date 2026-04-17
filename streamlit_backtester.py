@@ -340,37 +340,71 @@ def get_stock_data(ticker, start_date, end_date, demo_mode=False):
         else:
             df = None
 
-            # Try Yahoo Finance first
-            try:
-                st.write(f"Fetching data for {ticker} from Yahoo Finance...")
-                df_yf = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False, timeout=30)
+            # Calculate expected trading days
+            start = pd.Timestamp(start_date)
+            end = pd.Timestamp(end_date)
+            expected_days = int((end - start).days * 0.7)  # ~70% of calendar days are trading days
 
-                if df_yf is not None and len(df_yf) > 0:
-                    # Check if we got reasonable amount of data
-                    start = pd.Timestamp(start_date)
-                    end = pd.Timestamp(end_date)
-                    expected_days = (end - start).days * 0.7  # ~70% of calendar days are trading days
+            # Try Yahoo Finance first (free, unlimited)
+            st.write(f"Fetching data for {ticker} from Yahoo Finance...")
+            df_yf = yf.download(ticker, period='max', multi_level_index=False, timeout=30)
 
-                    if len(df_yf) >= expected_days * 0.5:  # At least 50% of expected
-                        df = df_yf
-                        st.success(f"Successfully fetched {len(df)} days of data from Yahoo Finance")
-                    else:
-                        st.warning(f"Yahoo Finance returned limited data ({len(df_yf)} days). Trying Alpha Vantage...")
-            except Exception as e:
-                st.warning(f"Yahoo Finance failed: {str(e)}. Trying Alpha Vantage...")
+            if df_yf is not None and len(df_yf) > 0:
+                # Filter to requested date range
+                df_yf = df_yf.loc[start:end]
 
-            # Fallback to Alpha Vantage if Yahoo Finance failed or returned limited data
-            if df is None or len(df) == 0:
-                alpha_key = get_alpha_vantage_key()
-                if alpha_key:
-                    st.write(f"Fetching data for {ticker} from Alpha Vantage...")
-                    df = fetch_alpha_vantage_data(ticker, start_date, end_date)
-                    if df is not None and len(df) > 0:
-                        st.success(f"Successfully fetched {len(df)} days of data from Alpha Vantage")
+                if len(df_yf) > 0:
+                    df = df_yf
+
+            # Validate Yahoo Finance data quality
+            use_alpha_vantage = False
+            if df is not None and len(df) > 0:
+                issues = []
+
+                # Check 1: Not enough data points
+                if len(df) < expected_days * 0.8:  # Less than 80% of expected
+                    issues.append(f"Only {len(df)} days (expected ~{expected_days})")
+
+                # Check 2: Flat lines (same price repeated)
+                if 'close' in df.columns and len(df) > 10:
+                    # Check for consecutive identical prices (indicates bad data)
+                    price_changes = df['close'].diff().abs()
+                    zero_changes = (price_changes == 0).sum()
+                    flat_ratio = zero_changes / len(df)
+                    if flat_ratio > 0.1:  # More than 10% flat days
+                        issues.append(f"{flat_ratio*100:.0f}% flat prices (repeated values)")
+
+                # Check 3: Price variance too low (suspicious flat line)
+                if 'close' in df.columns and len(df) > 20:
+                    price_std = df['close'].std()
+                    price_mean = df['close'].mean()
+                    if price_mean > 0:
+                        cv = price_std / price_mean  # Coefficient of variation
+                        if cv < 0.001:  # Almost no variance
+                            issues.append(f"Very low price variance (CV={cv:.6f})")
+
+                # Report issues and decide whether to use Alpha Vantage
+                if issues:
+                    st.warning(f"Yahoo Finance data quality issues detected: {', '.join(issues)}")
+                    alpha_key = get_alpha_vantage_key()
+                    if alpha_key:
+                        st.write("Trying Alpha Vantage for better data quality...")
+                        use_alpha_vantage = True
+
+            # Fallback to Alpha Vantage if Yahoo Finance data quality is poor
+            if use_alpha_vantage:
+                df_alpha = fetch_alpha_vantage_data(ticker, start_date, end_date)
+                if df_alpha is not None and len(df_alpha) > 0:
+                    df = df_alpha
+                    st.success(f"Using Alpha Vantage data: {len(df)} days")
+                else:
+                    st.warning("Alpha Vantage also has issues, using Yahoo Finance data as-is")
 
             if df is None or len(df) == 0:
                 st.error(f"No data available for {ticker}. The ticker may be invalid or delisted.")
                 return None
+
+            st.success(f"Using data with {len(df)} days")
 
             # Rename columns to match backtrader's expected format
             df = df.rename(columns={
