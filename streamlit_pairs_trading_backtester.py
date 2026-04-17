@@ -42,7 +42,22 @@ class BaseStrategy(bt.Strategy):
         print(f'{dt.isoformat()}: {txt}')
 
 
-# --- Pairs Trading Strategy ---
+# class LogReturn(bt.Indicator):
+#     """Calculate log returns: ln(price_t / price_{t-1})"""
+#     lines = ('log_return',)
+#     params = (('period', 1),)
+#
+#     def __init__(self):
+#         # Calculate price ratio
+#         self.ratio = self.data / self.data(-self.p.period)
+#
+#     def next(self):
+#         ratio = self.ratio[0]
+#         if ratio > 0:  # Avoid log(negative)
+#             self.lines.log_return[0] = np.log(ratio)
+#         else:
+#             self.lines.log_return[0] = 0
+
 class PairsTradingStrategy(BaseStrategy):
     params = (
         ('fast', 20),
@@ -52,7 +67,8 @@ class PairsTradingStrategy(BaseStrategy):
         ('ticker1', '00700.HK'),
         ('ticker2', '600519.SS'),
         ('use_regime', True),
-        ('regime_check_interval', 20)  # New parameter
+        ('regime_check_interval', 20),
+        ('debug_mode', False)  # Add debug parameter
     )
 
     def __init__(self):
@@ -60,10 +76,12 @@ class PairsTradingStrategy(BaseStrategy):
         self.data1 = self.datas[0]
         self.data2 = self.datas[1]
 
-        # More efficient calculation
-        self.pct1 = bt.indicators.PctChange(self.data1.close)
-        self.pct2 = bt.indicators.PctChange(self.data2.close)
-        self.spread = bt.indicators.OperationN(lambda x, y: np.log(1 + x) - np.log(1 + y), self.pct1, self.pct2)
+        # Calculate ROC (percentage change)
+        self.roc1 = bt.indicators.ROC(self.data1.close, period=1)
+        self.roc2 = bt.indicators.ROC(self.data2.close, period=1)
+
+        # Calculate spread as difference of ROC values
+        self.spread = self.roc1 - self.roc2
 
         self.sma = bt.indicators.SMA(self.spread, period=self.p.slow)
         self.stddev = bt.indicators.StdDev(self.spread, period=self.p.fast)
@@ -80,6 +98,11 @@ class PairsTradingStrategy(BaseStrategy):
     def next(self):
         if self.order:
             return
+
+        # Debug info - print every 50 bars
+        if self.p.debug_mode and len(self) % 50 == 0:
+            print(f"Bar: {len(self)}, Date: {self.data1.datetime.date(0)}")
+            print(f"Spread: {self.spread[0]}, Z-Score: {self.zscore[0]}")
 
         # Make sure we have enough data
         if len(self) < self.min_bars_required:
@@ -128,14 +151,41 @@ class PairsTradingStrategy(BaseStrategy):
                 self.log(f"POSITION CLOSED, Spread Z-Score: {z:.2f}")
 
 
+def inspect_data(df1, df2, ticker1, ticker2):
+    """Inspect data for common issues before running backtest"""
+    issues = []
+
+    # Check for NaN values
+    if df1['close'].isna().any():
+        issues.append(f"NaN values found in {ticker1} close prices")
+    if df2['close'].isna().any():
+        issues.append(f"NaN values found in {ticker2} close prices")
+
+    # Check for zero values
+    if (df1['close'] == 0).any():
+        issues.append(f"Zero values found in {ticker1} close prices")
+    if (df2['close'] == 0).any():
+        issues.append(f"Zero values found in {ticker2} close prices")
+
+    # Check for date alignment
+    df1_dates = set(df1['datetime'].dt.date)
+    df2_dates = set(df2['datetime'].dt.date)
+    if df1_dates != df2_dates:
+        issues.append(
+            f"Date mismatch: {ticker1} has {len(df1_dates)} unique dates, {ticker2} has {len(df2_dates)} unique dates")
+        common_dates = len(df1_dates.intersection(df2_dates))
+        issues.append(f"Only {common_dates} dates in common between the two tickers")
+
+    return issues
+
+
 def get_stock_data(ticker, start_date, end_date, demo_mode=False):
     try:
         if demo_mode:
             return get_demo_data(ticker)
         else:
             df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False)
-            df.reset_index(inplace=True)
-            df.rename(columns={'Date': 'datetime'}, inplace=True)
+
             df.rename(columns={
                 'Open': 'open',
                 'High': 'high',
@@ -143,6 +193,10 @@ def get_stock_data(ticker, start_date, end_date, demo_mode=False):
                 'Close': 'close',
                 'Volume': 'volume'
             }, inplace=True)
+            # Reset index to make date a column
+            df = df.reset_index()
+            df = df.rename(columns={'Date': 'datetime'})
+
             return df
     except Exception as e:
         st.error(f"Failed to download data for {ticker}: {str(e)}")
@@ -166,11 +220,19 @@ def get_demo_data(ticker):
     })
 
 
-def run_backtest(strategy_class, ticker1, ticker2, start_date, end_date, demo_mode=False, **params):
+def run_backtest(strategy_class, ticker1, ticker2, start_date, end_date, demo_mode=False, debug_mode=False, **params):
+    # Add debug logging
+    if debug_mode:
+        st.write("Debug mode enabled - showing detailed execution information")
+
     cerebro = bt.Cerebro()
     cerebro.broker.setcommission(commission=0.001)
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+
+    # Add debug logging
+    if debug_mode:
+        st.write(f"Downloading data for {ticker1} and {ticker2}")
 
     df1 = get_stock_data(ticker1, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), demo_mode)
     df2 = get_stock_data(ticker2, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), demo_mode)
@@ -179,9 +241,21 @@ def run_backtest(strategy_class, ticker1, ticker2, start_date, end_date, demo_mo
         st.error("Missing data for one or both tickers.")
         return None, None
 
-    data1 = bt.feeds.PandasData(dataname=df1, datetime='datetime', open='open', high='high', low='low', close='close', volume='volume')
-    data2 = bt.feeds.PandasData(dataname=df2, datetime='datetime', open='open', high='high', low='low', close='close', volume='volume')
+    # Inspect data for issues
+    if debug_mode:
+        issues = inspect_data(df1, df2, ticker1, ticker2)
+        if issues:
+            st.warning("Potential data issues detected:")
+            for issue in issues:
+                st.write(f"- {issue}")
 
+    # Add debug info about data
+    if debug_mode:
+        st.write(f"Data loaded: {ticker1} ({len(df1)} rows), {ticker2} ({len(df2)} rows)")
+        st.write(f"Date range: {df1['datetime'].min()} to {df1['datetime'].max()}")
+
+    data1 = bt.feeds.PandasData(dataname=df1, datetime='datetime', open='open', high='high', low='low', close='close', volume='volume',openinterest=-1 )
+    data2 = bt.feeds.PandasData(dataname=df2, datetime='datetime', open='open', high='high', low='low', close='close', volume='volume',openinterest=-1 )
     cerebro.adddata(data1)
     cerebro.adddata(data2)
 
@@ -198,7 +272,28 @@ def run_backtest(strategy_class, ticker1, ticker2, start_date, end_date, demo_mo
     spread_series = np.array(strat.spread.array)
     zscores = np.array(strat.zscore.array)
 
-    if len(spread_series) > 0:
+    # Generate plot - with debugging for empty sequence
+    if debug_mode:
+        st.write("Checking data for plotting...")
+        st.write(f"Spread array length: {len(strat.spread.array)}")
+        st.write(f"Z-score array length: {len(strat.zscore.array)}")
+
+        # Check for empty arrays
+        if len(strat.spread.array) == 0:
+            st.error("Spread array is empty!")
+        if len(strat.zscore.array) == 0:
+            st.error("Z-score array is empty!")
+
+    # Then proceed with plotting
+    spread_series = np.array(strat.spread.array)
+    zscores = np.array(strat.zscore.array)
+
+    # Add safety checks
+    if len(spread_series) == 0:
+        st.error("No spread data available for plotting")
+        # Create empty plot
+        ax[0].text(0.5, 0.5, "No spread data available", ha='center', va='center')
+    else:
         ax[0].plot(spread_series, label="Spread", color='blue')
         ax[0].axhline(np.mean(spread_series), color='gray', linestyle='--')
         ax[0].set_title("Spread Between Assets")
@@ -233,6 +328,9 @@ def run_backtest(strategy_class, ticker1, ticker2, start_date, end_date, demo_mo
 def main():
     st.set_page_config(page_title="Pairs Trading Backtester (A/H Shares)", layout="wide")
     st.title("Statistical Arbitrage Pairs Trading Backtester (China A/H Shares)")
+
+    # Add debug mode toggle
+    debug_mode = st.sidebar.checkbox("Debug Mode", value=True)
 
     st.sidebar.header("Strategy Configuration")
     selected_strategy_name = "PairsTradingStrategy"
@@ -273,12 +371,20 @@ def main():
                 start_date=start_date,
                 end_date=end_date,
                 demo_mode=demo_mode,
+                debug_mode=debug_mode,
                 **strategy_params
             )
             st.pyplot(fig)
             st.success("Backtest completed!")
         except Exception as e:
             st.error(f"Error during backtest: {e}")
+
+            # Add detailed error information
+            if debug_mode:
+                import traceback
+                st.error("Detailed Error Information:")
+                st.code(traceback.format_exc())
+
         progress_bar.progress(100)
 
 if __name__ == "__main__":
