@@ -173,3 +173,6 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 /.idea
+
+# Streamlit secrets (never commit actual API keys)
+.streamlit/secrets.toml

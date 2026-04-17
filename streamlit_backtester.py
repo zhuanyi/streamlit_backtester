@@ -4,6 +4,7 @@ import numpy as np
 import backtrader as bt
 import yfinance as yf
 import matplotlib
+import random
 
 # Use non-interactive backend
 matplotlib.use('Agg')
@@ -11,6 +12,8 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import math
 from scipy import stats
+import urllib.request
+import urllib.error
 
 
 # Create a base strategy class that will be inherited by all other strategies
@@ -221,6 +224,90 @@ strategies = {
 }
 
 
+def get_alpha_vantage_key():
+    """
+    Get a random Alpha Vantage API key from secrets
+    Returns None if no keys are configured
+    """
+    try:
+        # Check if secrets are available (not available in local development without .streamlit/secrets.toml)
+        if hasattr(st, 'secrets') and 'alpha_vantage_keys' in st.secrets:
+            keys = st.secrets['alpha_vantage_keys']
+            if keys and len(keys) > 0:
+                return random.choice(keys)
+    except Exception:
+        pass
+    return None
+
+
+def fetch_alpha_vantage_data(ticker, start_date, end_date):
+    """
+    Fetch historical stock data from Alpha Vantage API
+
+    Parameters:
+        ticker: Stock ticker symbol
+        start_date: Start date for data retrieval
+        end_date: End date for data retrieval
+
+    Returns:
+        DataFrame: Historical price data with OHLCV format, or None if fetch fails
+    """
+    api_key = get_alpha_vantage_key()
+    if not api_key:
+        return None
+
+    try:
+        # Alpha Vantage daily time series endpoint
+        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&outputsize=full&apikey={api_key}"
+
+        with urllib.request.urlopen(url, timeout=30) as response:
+            data = json.loads(response.read().decode())
+
+        # Check for error messages
+        if "Error Message" in data:
+            st.error(f"Alpha Vantage error: {data['Error Message']}")
+            return None
+        elif "Note" in data:
+            # Rate limit hit - try with a different key
+            st.warning("Alpha Vantage rate limit hit, trying alternative data source...")
+            return None
+
+        # Extract time series data
+        time_series = data.get('Time Series (Daily)', {})
+
+        if not time_series:
+            return None
+
+        # Convert to DataFrame
+        df_data = []
+        for date, values in time_series.items():
+            try:
+                date_dt = pd.to_datetime(date)
+                # Filter by date range
+                if pd.Timestamp(start_date) <= date_dt <= pd.Timestamp(end_date):
+                    df_data.append({
+                        'datetime': date_dt,
+                        'open': float(values['1. open']),
+                        'high': float(values['2. high']),
+                        'low': float(values['3. low']),
+                        'close': float(values['4. close']),
+                        'volume': float(values['5. volume'])
+                    })
+            except (ValueError, KeyError):
+                continue
+
+        if not df_data:
+            return None
+
+        df = pd.DataFrame(df_data)
+        df = df.sort_values('datetime').reset_index(drop=True)
+        return df
+
+    except Exception as e:
+        st.error(f"Failed to fetch data from Alpha Vantage: {str(e)}")
+        return None
+
+
 def get_stock_data(ticker, start_date, end_date, demo_mode=False):
     """
     Get historical stock data for backtesting
@@ -235,6 +322,7 @@ def get_stock_data(ticker, start_date, end_date, demo_mode=False):
         DataFrame: Historical price data with OHLCV format
         None: If data retrieval fails
     """
+    import json  # Import here for Alpha Vantage function
     try:
         if demo_mode:
             # Use static demo data
@@ -250,23 +338,35 @@ def get_stock_data(ticker, start_date, end_date, demo_mode=False):
 
             return df
         else:
-            # Get data from Yahoo Finance - use period-based approach for more reliable results
-            # Calculate period in days for more reliable fetching
-            start = pd.Timestamp(start_date)
-            end = pd.Timestamp(end_date)
-            period_days = (end - start).days
+            df = None
 
-            # yfinance sometimes has issues with date ranges, try multiple approaches
-            df = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False, timeout=30)
+            # Try Yahoo Finance first
+            try:
+                st.write(f"Fetching data for {ticker} from Yahoo Finance...")
+                df_yf = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False, timeout=30)
 
-            # If we got limited data, try with period parameter
-            if df is None or len(df) < period_days * 0.5:  # Less than ~50% of expected trading days
-                st.warning(f"Limited data received from Yahoo Finance. Trying alternative fetch method...")
-                # Try fetching with max period and then filter
-                df = yf.download(ticker, period='max', multi_level_index=False, timeout=30)
-                if df is not None and len(df) > 0:
-                    # Filter to requested date range
-                    df = df.loc[start:end]
+                if df_yf is not None and len(df_yf) > 0:
+                    # Check if we got reasonable amount of data
+                    start = pd.Timestamp(start_date)
+                    end = pd.Timestamp(end_date)
+                    expected_days = (end - start).days * 0.7  # ~70% of calendar days are trading days
+
+                    if len(df_yf) >= expected_days * 0.5:  # At least 50% of expected
+                        df = df_yf
+                        st.success(f"Successfully fetched {len(df)} days of data from Yahoo Finance")
+                    else:
+                        st.warning(f"Yahoo Finance returned limited data ({len(df_yf)} days). Trying Alpha Vantage...")
+            except Exception as e:
+                st.warning(f"Yahoo Finance failed: {str(e)}. Trying Alpha Vantage...")
+
+            # Fallback to Alpha Vantage if Yahoo Finance failed or returned limited data
+            if df is None or len(df) == 0:
+                alpha_key = get_alpha_vantage_key()
+                if alpha_key:
+                    st.write(f"Fetching data for {ticker} from Alpha Vantage...")
+                    df = fetch_alpha_vantage_data(ticker, start_date, end_date)
+                    if df is not None and len(df) > 0:
+                        st.success(f"Successfully fetched {len(df)} days of data from Alpha Vantage")
 
             if df is None or len(df) == 0:
                 st.error(f"No data available for {ticker}. The ticker may be invalid or delisted.")
