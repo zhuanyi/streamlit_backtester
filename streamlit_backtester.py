@@ -125,7 +125,7 @@ class MomentumStrategy(BaseStrategy):
     """
     params = (
         ('lookback', 90),  # Lookback period for momentum calculation
-        ('percentile', 80),  # Percentile threshold for entry (0-100)
+        ('percentile', 60),  # Percentile threshold for entry (0-100)
         ('exit_percentile', 50),  # Percentile threshold for exit (0-100)
     )
 
@@ -181,7 +181,7 @@ class RSIStrategy(BaseStrategy):
     params = (
         ('period', 14),  # RSI calculation period
         ('overbought', 70),  # Overbought threshold
-        ('oversold', 30),  # Oversold threshold
+        ('oversold', 40),  # Oversold threshold
     )
 
     def __init__(self):
@@ -429,6 +429,13 @@ def run_backtest(strategy_class, ticker, start_date, end_date, demo_mode=False, 
     # Extract trade data
     trades_df = pd.DataFrame(strat.trades) if hasattr(strat, 'trades') and strat.trades else pd.DataFrame()
 
+    # Warn if no trades were executed
+    if trades_df.empty:
+        st.warning("No trades were executed during this backtest period. This may be due to:")
+        st.write("- Strategy parameters being too restrictive (e.g., high momentum percentile threshold)")
+        st.write("- Market conditions not meeting entry criteria (e.g., RSI never reaching oversold levels)")
+        st.write("- Insufficient data for the strategy's warm-up period")
+
     # Plot results with dynamic figure size
     fig = plt.figure(figsize=(10, 8))  # Default figsize, will be resized via Streamlit
 
@@ -491,12 +498,14 @@ def run_backtest(strategy_class, ticker, start_date, end_date, demo_mode=False, 
     ax2.grid(True)
 
     # Add text with summary statistics
+    sharpe_ratio = sharpe.get('sharperatio') if sharpe else None
+    max_dd = drawdown.get('max', {}).get('drawdown') if drawdown else None
     stats_text = (
         f"Initial Capital: $100,000\n"
         f"Final Value: ${cerebro.broker.getvalue():,.2f}\n"
         f"Total Return: {cerebro.broker.getvalue() / 100000 - 1:.2%}\n"
-        f"Sharpe Ratio: {sharpe.get('sharperatio', 0):.2f}\n"
-        f"Max Drawdown: {drawdown.get('max', {}).get('drawdown', 0):.2%}"
+        f"Sharpe Ratio: {sharpe_ratio:.2f if sharpe_ratio is not None else 'N/A'}\n"
+        f"Max Drawdown: {max_dd:.2f% if max_dd is not None else 'N/A'}"
     )
 
     plt.figtext(0.15, 0.02, stats_text, fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
